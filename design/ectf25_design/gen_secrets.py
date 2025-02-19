@@ -16,29 +16,30 @@ import os
 from cryptography.fernet import Fernet
 
 def generate_secret_key():
-    return base64.urlsafe_b64encode(os.urandom(32)).decode('utf-8')
+    return Fernet.generate_key().decode('utf-8')  # Ensures a valid key for Fernet
 
 def encrypt_data(data, encryption_key):
-    fernet = Fernet(encryption_key)
+    fernet = Fernet(encryption_key.encode())  # Ensure the key is in bytes
     encrypted_data = fernet.encrypt(data.encode())
     return encrypted_data
 
 def main():
-    encryption_key = Fernet.generate_key()
+    encryption_key = Fernet.generate_key()  # Correctly generate a valid encryption key
+
     secrets = {
         "secret_key": generate_secret_key(),
-        "encryption_key": base64.urlsafe_b64encode(Fernet.generate_key()).decode('utf-8')
+        "encryption_key": Fernet.generate_key().decode('utf-8')  # Generates another valid key
     }
-    
+
     secrets_json = json.dumps(secrets, indent=4)
     encrypted_secrets = encrypt_data(secrets_json, encryption_key)
-    
-    with open("secrets.json", "wb") as f:
+
+    with open("secrets.enc", "wb") as f:  # Changed extension for clarity
         f.write(encrypted_secrets)
-    
+
     # Store the encryption key securely, not in the same location as the secrets file
     with open("encryption_key.key", "wb") as f:
-        f.write(encryption_key)
+        f.write(encryption_key)  # Key is already in bytes
 
 if __name__ == "__main__":
     main()
