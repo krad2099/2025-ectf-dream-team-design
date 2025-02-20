@@ -14,6 +14,7 @@
 /*********************** INCLUDES *************************/
 #include <stdio.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <string.h>
 #include "mxc_device.h"
 #include "status_led.h"
@@ -22,10 +23,10 @@
 #include "simple_flash.h"
 #include "host_messaging.h"
 #include "simple_uart.h"
-#include "simple_crypto.h" // Include simple_crypto functions
+#include "simple_crypto.h"
 #include <wolfssl/options.h>
 #include <wolfssl/ssl.h>
-#include <wolfssl/wolfcrypt/aes.h> // Include wolfSSL for cryptographic functions
+#include <wolfssl/wolfcrypt/aes.h>
 
 #define timestamp_t uint64_t
 #define channel_id_t uint32_t
@@ -79,6 +80,12 @@ typedef struct {
 
 flash_entry_t decoder_status;
 
+typedef enum {
+    LIST_MSG = 1,
+    DECODE_MSG = 2,
+    SUBSCRIBE_MSG = 3
+} msg_type_t;
+
 int is_subscribed(channel_id_t channel) {
     if (channel == EMERGENCY_CHANNEL) {
         return 1;
@@ -96,12 +103,9 @@ int list_channels() {
     pkt_len_t len;
 
     resp.n_channels = 0;
-
     for (uint32_t i = 0; i < MAX_CHANNEL_COUNT; i++) {
         if (decoder_status.subscribed_channels[i].active) {
-            resp.channel_info[resp.n_channels].channel = decoder_status.subscribed_channels[i].id;
-            resp.channel_info[resp.n_channels].start = decoder_status.subscribed_channels[i].start_timestamp;
-            resp.channel_info[resp.n_channels].end = decoder_status.subscribed_channels[i].end_timestamp;
+            resp.channel_info[resp.n_channels] = decoder_status.subscribed_channels[i];
             resp.n_channels++;
         }
     }
@@ -112,28 +116,22 @@ int list_channels() {
 }
 
 int update_subscription(pkt_len_t pkt_len, subscription_update_packet_t *update) {
-    int i;
-
     if (update->channel == EMERGENCY_CHANNEL) {
         STATUS_LED_RED();
-        print_error("Failed to update subscription - cannot subscribe to emergency channel\n");
+        print_error("Cannot subscribe to emergency channel\n");
         return -1;
     }
 
-    for (i = 0; i < MAX_CHANNEL_COUNT; i++) {
+    for (int i = 0; i < MAX_CHANNEL_COUNT; i++) {
         if (decoder_status.subscribed_channels[i].id == update->channel || !decoder_status.subscribed_channels[i].active) {
-            decoder_status.subscribed_channels[i].active = true;
-            decoder_status.subscribed_channels[i].id = update->channel;
-            decoder_status.subscribed_channels[i].start_timestamp = update->start_timestamp;
-            decoder_status.subscribed_channels[i].end_timestamp = update->end_timestamp;
+            decoder_status.subscribed_channels[i] = (channel_status_t){
+                .active = true,
+                .id = update->channel,
+                .start_timestamp = update->start_timestamp,
+                .end_timestamp = update->end_timestamp
+            };
             break;
         }
-    }
-
-    if (i == MAX_CHANNEL_COUNT) {
-        STATUS_LED_RED();
-        print_error("Failed to update subscription - max subscriptions installed\n");
-        return -1;
     }
 
     flash_simple_erase_page(FLASH_STATUS_ADDR);
@@ -143,140 +141,70 @@ int update_subscription(pkt_len_t pkt_len, subscription_update_packet_t *update)
 }
 
 int decode(pkt_len_t pkt_len, frame_packet_t *new_frame) {
-    char output_buf[128] = {0};
-    uint16_t frame_size;
-    channel_id_t channel;
-
-    frame_size = pkt_len - (sizeof(new_frame->channel) + sizeof(new_frame->timestamp));
-    channel = new_frame->channel;
-
-    if (is_subscribed(channel)) {
-        print_debug("Subscription Valid\n");
-
-        // Decrypt the data using the simple_crypto API
-        uint8_t decrypted_data[FRAME_SIZE];
-        uint8_t key[16] = {0}; // Use the actual key from secrets.json
-
-        int ret = decrypt_sym(new_frame->data, FRAME_SIZE, key, decrypted_data);
-        if (ret != 0) {
-            STATUS_LED_RED();
-            print_error("Decryption failed\n");
-            return -1;
-        }
-
-        write_packet(DECODE_MSG, decrypted_data, frame_size);
-        return 0;
-    } else {
+    uint8_t decrypted_data[FRAME_SIZE];
+    uint8_t key[16] = {0};
+    
+    if (!is_subscribed(new_frame->channel)) {
         STATUS_LED_GREEN();
-        sprintf(output_buf, "Receiving unsubscribed channel data.  %u\n", channel);
-        print_error(output_buf);
+        print_error("Receiving unsubscribed channel data\n");
         return -1;
     }
+
+    int ret = decrypt_sym(new_frame->data, FRAME_SIZE, key, decrypted_data);
+    if (ret != 0) {
+        STATUS_LED_RED();
+        print_error("Decryption failed\n");
+        return -1;
+    }
+
+    write_packet(DECODE_MSG, decrypted_data, FRAME_SIZE);
+    return 0;
 }
 
 void init() {
-    int ret;
-
     flash_simple_init();
     flash_simple_read(FLASH_STATUS_ADDR, &decoder_status, sizeof(flash_entry_t));
+    
     if (decoder_status.first_boot != FLASH_FIRST_BOOT) {
-        print_debug("First boot.  Setting flash...\n");
-
         decoder_status.first_boot = FLASH_FIRST_BOOT;
-        channel_status_t subscription[MAX_CHANNEL_COUNT];
-
-        for (int i = 0; i < MAX_CHANNEL_COUNT; i++) {
-            subscription[i].start_timestamp = DEFAULT_CHANNEL_TIMESTAMP;
-            subscription[i].end_timestamp = DEFAULT_CHANNEL_TIMESTAMP;
-            subscription[i].active = false;
-        }
-
-        memcpy(decoder_status.subscribed_channels, subscription, MAX_CHANNEL_COUNT * sizeof(channel_status_t));
+        memset(decoder_status.subscribed_channels, 0, sizeof(decoder_status.subscribed_channels));
         flash_simple_erase_page(FLASH_STATUS_ADDR);
         flash_simple_write(FLASH_STATUS_ADDR, &decoder_status, sizeof(flash_entry_t));
     }
-
-    ret = uart_init();
-    if (ret < 0) {
-        STATUS_LED_ERROR();
-        while (1);
-    }
 }
-
-#ifdef CRYPTO_EXAMPLE
-void crypto_example(void) {
-    char *data = "Crypto Example!";
-    uint8_t ciphertext[BLOCK_SIZE];
-    uint8_t key[KEY_SIZE];
-    uint8_t hash_out[HASH_SIZE];
-    uint8_t decrypted[BLOCK_SIZE];
-
-    char output_buf[128] = {0};
-
-    bzero(key, BLOCK_SIZE);
-
-    encrypt_sym((uint8_t *)data, BLOCK_SIZE, key, ciphertext);
-    print_debug("Encrypted data: \n");
-    print_hex_debug(ciphertext, BLOCK_SIZE);
-
-    hash(ciphertext, BLOCK_SIZE, hash_out);
-
-    print_debug("Hash result: \n");
-    print_hex_debug(hash_out, HASH_SIZE);
-
-    decrypt_sym(ciphertext, BLOCK_SIZE, key, decrypted);
-    sprintf(output_buf, "Decrypted message: %s\n", decrypted);
-    print_debug(output_buf);
-}
-#endif
 
 int main(void) {
-    char output_buf[128] = {0};
     uint8_t uart_buf[100];
     msg_type_t cmd;
-    int result;
     uint16_t pkt_len;
-
+    
     init();
-
     print_debug("Decoder Booted!\n");
 
     while (1) {
-        print_debug("Ready\n");
-
         STATUS_LED_GREEN();
-
-        result = read_packet(&cmd, uart_buf, &pkt_len);
-
-        if (result < 0) {
+        if (read_packet(&cmd, uart_buf, &pkt_len) < 0) {
             STATUS_LED_ERROR();
             print_error("Failed to receive cmd from host\n");
             continue;
         }
 
         switch (cmd) {
-        case LIST_MSG:
-            #ifdef CRYPTO_EXAMPLE
-                crypto_example();
-            #endif
-            list_channels();
-            break;
-
-        case DECODE_MSG:
-            STATUS_LED_PURPLE();
-            decode(pkt_len, (frame_packet_t *)uart_buf);
-            break;
-
-        case SUBSCRIBE_MSG:
-            STATUS_LED_YELLOW();
-            update_subscription(pkt_len, (subscription_update_packet_t *)uart_buf);
-            break;
-
-        default:
-            STATUS_LED_ERROR();
-            sprintf(output_buf, "Invalid Command: %c\n", cmd);
-            print_error(output_buf);
-            break;
+            case LIST_MSG:
+                list_channels();
+                break;
+            case DECODE_MSG:
+                STATUS_LED_PURPLE();
+                decode(pkt_len, (frame_packet_t *)uart_buf);
+                break;
+            case SUBSCRIBE_MSG:
+                STATUS_LED_YELLOW();
+                update_subscription(pkt_len, (subscription_update_packet_t *)uart_buf);
+                break;
+            default:
+                STATUS_LED_ERROR();
+                print_error("Invalid Command\n");
+                break;
         }
     }
 }
