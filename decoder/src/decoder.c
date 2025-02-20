@@ -24,7 +24,6 @@
 #include "host_messaging.h"
 #include "simple_uart.h"
 #include "simple_crypto.h"
-#include <wolfssl/options.h>
 #include <wolfssl/ssl.h>
 #include <wolfssl/wolfcrypt/aes.h>
 
