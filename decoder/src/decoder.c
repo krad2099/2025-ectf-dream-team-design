@@ -24,8 +24,7 @@
 #include "host_messaging.h"
 #include "simple_uart.h"
 #include "simple_crypto.h"
-#include <wolfssl/ssl.h>
-#include <wolfssl/wolfcrypt/aes.h>
+
 
 #define timestamp_t uint64_t
 #define channel_id_t uint32_t
