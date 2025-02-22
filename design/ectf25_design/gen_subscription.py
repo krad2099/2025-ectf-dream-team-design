@@ -31,7 +31,7 @@ def main():
     parser = argparse.ArgumentParser(description="Generate subscription update")
     parser.add_argument("secrets", type=str, help="Path to the secrets file")
     parser.add_argument("output", type=str, help="Output subscription file")
-    parser.add_argument("decoder_id", type=lambda x: int(x, 0), help="Decoder ID (supports hex)")
+    parser.add_argument("decoder_id", type=int, help="Decoder ID")
     parser.add_argument("start_time", type=int, help="Start timestamp")
     parser.add_argument("end_time", type=int, help="End timestamp")
     parser.add_argument("channel", type=int, help="Channel ID")
