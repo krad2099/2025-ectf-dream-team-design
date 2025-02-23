@@ -1,15 +1,3 @@
-"""
-Author: Ben Janis
-Date: 2025
-
-This source file is part of an example system for MITRE's 2025 Embedded System CTF
-(eCTF). This code is being provided only for educational purposes for the 2025 MITRE
-eCTF competition, and may not meet MITRE standards for quality. Use this code at your
-own risk!
-
-Copyright: Copyright (c) 2025 The MITRE Corporation
-"""
-
 import json
 import argparse
 
@@ -38,7 +26,6 @@ def main():
     args = parser.parse_args()
 
     generate_subscription(args.secrets, args.output, args.decoder_id, args.start_time, args.end_time, args.channel)
-
 
 if __name__ == "__main__":
     main()
